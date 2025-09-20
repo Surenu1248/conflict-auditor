@@ -4,8 +4,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import io
 from pypdf import PdfReader
-# --- NEW: Import Google's Embedding model ---
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import FAISS
 from langchain.docstore.document import Document
@@ -14,29 +13,17 @@ import google.generativeai as genai
 from typing import List
 
 # --- Environment and Model Setup ---
-# We no longer need the Hugging Face token
+# The model is now pre-loaded during the build, so we can initialize it directly.
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
-
-# --- Lazy Loading Implementation (now for the lightweight API client) ---
-embeddings = None
-def get_embeddings():
-    """Initializes and returns the Google embedding model client."""
-    global embeddings
-    if embeddings is None:
-        print("Initializing Google AI Embeddings client...")
-        # This is now a lightweight client, not a heavy model download
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-        print("Client initialized.")
-    return embeddings
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 app = FastAPI(title="Smart Doc Checker Agent API")
-
+# ... (The rest of your main.py code remains exactly the same) ...
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-# Endpoint to serve the HTML frontend
 @app.get("/", response_class=HTMLResponse)
 async def read_index():
     with open("index.html") as f:
@@ -44,11 +31,10 @@ async def read_index():
 
 @app.post("/analyze/")
 async def analyze_documents(files: List[UploadFile] = File(...)):
+    # The 'vector_store' is now created fresh for each analysis
     if len(files) < 2:
         return JSONResponse(status_code=400, content={"message": "Please upload at least two documents to compare."})
     try:
-        current_embeddings = get_embeddings()
-        
         all_chunks = []
         for file in files:
             if file.content_type != "application/pdf": continue
@@ -63,7 +49,8 @@ async def analyze_documents(files: List[UploadFile] = File(...)):
         if not all_chunks:
             return JSONResponse(status_code=400, content={"message": "Could not extract text from the provided PDFs."})
         
-        vector_store = FAISS.from_documents(all_chunks, embedding=current_embeddings)
+        vector_store = FAISS.from_documents(all_chunks, embedding=embeddings)
+        
         conflicts = []
         checked_pairs = set()
         for i, doc1 in enumerate(all_chunks):
